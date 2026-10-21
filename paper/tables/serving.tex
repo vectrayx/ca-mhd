@@ -1,0 +1,33 @@
+\begin{tabular}{llrrrr}
+\toprule
+$\gamma$ & Método & viol\% & p99\,ms & switches & cov \\
+\midrule
+$\gamma0$ & B1: teacher (saturated) & 70.6$\pm$(0.2) & 168.7 & 0 & 0.00 \\
+ & B1': student-only (LCD) & 1.9$\pm$(0.1) & 1.7 & 0 & 1.00 \\
+ & Schmitt·LCD+DAgger (ours) & 1.9$\pm$(0.4) & 1.7 & 4 & 0.70 \\
+ & Schmitt·LCD (ours) & 1.9$\pm$(0.4) & 1.7 & 4 & 0.70 \\
+ & B4: fixed-threshold (best-q) & 2.0$\pm$(0.6) & 1.7 & 1,385 & 0.68 \\
+ & B5: random matched & 62.9$\pm$(3.9) & 15.5 & 16,125 & 0.70 \\
+\addlinespace
+$\gamma0.25$ & B1: teacher (saturated) & 70.7$\pm$(0.1) & 163.4 & 0 & 0.00 \\
+ & B1': student-only (LCD) & 2.0$\pm$(1.1) & 1.9 & 0 & 1.00 \\
+ & Schmitt·LCD+DAgger (ours) & 2.1$\pm$(1.0) & 1.7 & 4 & 0.70 \\
+ & Schmitt·LCD (ours) & 2.1$\pm$(1.0) & 1.7 & 4 & 0.70 \\
+ & B4: fixed-threshold (best-q) & 2.0$\pm$(0.8) & 1.7 & 1,263 & 0.69 \\
+ & B5: random matched & 61.8$\pm$(4.4) & 13.0 & 16,128 & 0.70 \\
+\addlinespace
+$\gamma0.5$ & B1: teacher (saturated) & 70.8$\pm$(0.1) & 168.2 & 0 & 0.00 \\
+ & B1': student-only (LCD) & 1.8$\pm$(0.6) & 1.7 & 0 & 1.00 \\
+ & Schmitt·LCD+DAgger (ours) & 3.1$\pm$(1.5) & 5.1 & 4 & 0.69 \\
+ & Schmitt·LCD (ours) & 3.1$\pm$(1.5) & 5.1 & 4 & 0.69 \\
+ & B4: fixed-threshold (best-q) & 1.9$\pm$(0.9) & 1.7 & 1,449 & 0.72 \\
+ & B5: random matched & 68.2$\pm$(0.8) & 19.8 & 16,469 & 0.69 \\
+\addlinespace
+$\gamma1$ & B1: teacher (saturated) & 70.7$\pm$(0.2) & 170.3 & 0 & 0.00 \\
+ & B1': student-only (LCD) & 1.5$\pm$(0.3) & 1.6 & 0 & 1.00 \\
+ & Schmitt·LCD+DAgger (ours) & 1.3$\pm$(0.1) & 1.6 & 4 & 0.70 \\
+ & Schmitt·LCD (ours) & 1.3$\pm$(0.1) & 1.6 & 4 & 0.70 \\
+ & B4: fixed-threshold (best-q) & 1.4$\pm$(0.3) & 1.6 & 500 & 0.69 \\
+ & B5: random matched & 65.7$\pm$(2.4) & 17.0 & 16,099 & 0.70 \\
+\bottomrule
+\end{tabular}
