@@ -1,5 +1,8 @@
 # CA-MHD — Conditional Calibration Contracts under Coupled Load
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23540789.svg)](https://doi.org/10.5281/zenodo.23540789)
+[![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-jsantillana%2Fca--mhd-FFD21E.svg?logo=huggingface&labelColor=ff5a5f)](https://huggingface.co/jsantillana/ca-mhd-weights)
+
 Reproducible code and ACM paper for CA-MHD.
 
 ## Build paper
