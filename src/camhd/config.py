@@ -1,8 +1,6 @@
-"""Configuraciones explícitas del proyecto (semillas siempre presentes).
+"""Explicit project configurations (seeds always present).
 
-Todo entrenamiento/corrida de simulación debe partir de un dataclass de este
-módulo — sin globales mutables. Los valores por defecto son placeholders que
-el pre-registro (CONTINUE.md §6) fijará antes del pilot del plan v3.
+All training/simulation runs must start from a dataclass in this module — no mutable globals. Default values are placeholders that pre-registration (CONTINUE.md §6) will set before the v3 plan pilot.
 """
 
 from __future__ import annotations
@@ -12,65 +10,65 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class SmoothEceConfig:
-    """Ancho de banda κ del kernel smoothECE.
+    """Kernel smoothECE bandwidth κ.
 
-    Nota G1 del plan v3: κ se elige por bias-variance del estimador con el
-    n típico de ventana; es una cantidad PRE-REGISTRADA, no un tuneo mudo.
+    Note G1 of v3 plan: κ is chosen by bias-variance of the estimator with the
+    typical window n; it is a PRE-REGISTERED quantity, not a silent tuning.
     """
 
     bandwidth: float = 0.10
-    radius_scale: float = 5.0  # ventana = bandwidth * radius_scale
+    radius_scale: float = 5.0  # window = bandwidth * radius_scale
     include_self: bool = True
 
 
 @dataclass(frozen=True)
 class StreamConfig:
-    """Generador de stream acoplado (parámetro γ, plan v3 §3.5).
+    """Coupled stream generator (parameter γ, plan v3 §3.5).
 
-    γ=0  → caso nulo de v2 (llegada independiente del contenido).
-    γ=1  → acoplamiento total (los bursts inyectan ataque).
-    La mezcla de clases α(t) sigue α(t) = alpha0 + gamma * (1 - alpha0) * burst(t).
+    γ=0  → v2 null case (arrival independent of content).
+    γ=1  → total coupling (bursts inject attack).
+    The class mixture α(t) follows α(t) = alpha0 + gamma * (1 - alpha0) * burst(t).
     """
 
-    d: int = 24                       # dimensión de features de flow
-    n_choice_classes: int = 3         # subtipos de ataque (Choice multiclase)
-    n_severity_levels: int = 3        # niveles ordinales CORN (1..3 sobre ataque)
-    alpha0: float = 0.05              # cuota de ataque en régimen estable
-    gamma: float = 0.5                # acoplamiento carga↔contenido
-    period: float = 8.0               # periodo del régimen (s)
+    d: int = 24                       # dimension of flow features
+    n_choice_classes: int = 3         # attack subtypes (multiclass Choice)
+    n_severity_levels: int = 3        # CORN ordinal levels (1..3 over attack)
+    alpha0: float = 0.05              # attack quota in steady regime
+    gamma: float = 0.5                # load↔content coupling
+    period: float = 8.0               # regime period (s)
 
-    # Punto operativo pre-registrado (F2): C_t medido en CPU con batch=16 y
+    # Pre-registered operating point (F2): C_t measured on CPU with batch=16 and
     # service_scale=2.5 → C_t ≈ 12.7k ev/s: ρ_t(burst)=1.10 > 1 ≥ ρ_s=0.94.
-    burst_duty: float = 0.25          # 2 s de burst por periodo de 8 s
-    rate_idle: float = 2000.0         # llegadas/s en régimen estable
-    rate_burst: float = 14000.0       # llegadas/s en burst
-    attack_radius: float = 3.0        # ‖μ_ataque‖ — margen de Bayes Φ(−Δ/2)≈6.7%
-    feature_scale: float = 1.0        # σ del ruido gaussiano
+    burst_duty: float = 0.25          # 2 s burst per 8 s period
+    rate_idle: float = 2000.0         # arrivals/s in steady regime
+    rate_burst: float = 14000.0       # arrivals/s in burst
+    attack_radius: float = 3.0        # ‖μ_attack‖ — Bayes margin Φ(−Δ/2)≈6.7%
+    feature_scale: float = 1.0        # σ of Gaussian noise
     severity_probs: tuple[float, float, float] = (0.55, 0.30, 0.15)
     seed: int = 0
 
 
 @dataclass(frozen=True)
 class RouterConfig:
-    """Schmitt trigger por cabeza (plan v3 §3.4).
+    """Schmitt trigger per head (plan v3 §3.4).
 
-    El deadband (q_on − q_off) se deriva del κ_switch MEDIDO en el objetivo
-    y del dinamismo de la cola — no de tuneo a ojo; el microbenchmark (scripts/)
-    alimenta q_off antes de la campaña.
+    The deadband (q_on − q_off) is derived from the κ_switch MEASURED on the target
+    and from queue dynamics — not from hand tuning; the microbenchmark (scripts/)
+    feeds q_off before the campaign.
     """
 
     q_on: float = 0.80
     q_off: float = 0.50
-    min_dwell: float = 2.0            # s mínimos entre conmutación (anti-flapping residual)
-    latency_ema_alpha: float = 0.2    # suavizado del ℓ_p95 rodante
-    latency_deadband: float = 0.15    # fracción de cambio mínimo para re-acción
-    latency_refractory: float = 5.0   # s de congelación del canal tras conmutar
+    min_dwell: float = 2.0            # s minimum between switching (anti-flapping residual)
+    latency_ema_alpha: float = 0.2    # smoothing of rolling ℓ_p95
+    latency_deadband: float = 0.15    # fraction of minimum change for re-action
+    latency_refractory: float = 5.0   # s of channel freezing after switching
     seed: int = 0
 
 
 @dataclass(frozen=True)
 class RunConfig:
-    """Identidad de corrida: semillas separadas por subsistema (v3 §6)."""
+    """Run identity: seeds separated by subsystem (v3 §6)."""
 
     train_seed: int = 0
     stream_seed: int = 1

@@ -1,32 +1,32 @@
-"""smoothECE (Blasiok & Nakkiran, ICLR 2024) y ECE binned, implementación propia.
+"""smoothECE (Blasiok & Nakkiran, ICLR 2024) and ECE binned, own implementation.
 
-Elecciones documentadas (CONTINUE.md §5, con nota de optimización v4):
+Documented choices (CONTINUE.md §5, with optimization note v4):
 
-- Suavización RBF gaussiana en el espacio de confianza top-label, con la
-  CURVA DE FIT f̄(c) ≈ P(correct | top-label confidence = c) y
-  smoothECE = mean_i |c_i − f̄(c_i)| (estimador muestral, no el integral
-  sobre grilla de relplot; la definición pre-registrada es esta).
+- Gaussian RBF smoothing in the top-label trust space, with the
+FIT CURVE f (c) ≈ P(correct | top-label confidence = c) and
+smoothECE = mean_i |c_i − f － (c_i)| (sample estimator, not integral
+on relplot grid; the pre-recorded definition is this).
 
-- Para n grandes el cálculo se hace con el algoritmo CANÓNICO de B&N
-  (Apple relplot, kernels.py): scatter de las observaciones sobre una grilla
-  uniforme de E = max(2000, 20/κ) puntos con split lineal por bin, carrusel
-  discrete-convolve con el kernel gaussiano en la grilla, e interpolación
-  lineal de la curva en cada c_i observado. Coste O(n + E²) — con κ=0.05,
-  E=2000 → milisegundos en 255k puntos. Error de redondeo de la grilla
-  O(h²·|φ''|) con h=5e-4 → despreciable frente al ruido muestral y los
-  tamaños de efecto del estudio (~1e-2). Verificado con test de regresión
-  contra el cálculo pairwise exacto en datos tricolores saturados.
+- For large n, the calculation is made with B&N's CANONICAL ALGORITHM
+(Apple relplot, kernels.py): scatter of the observations on a grid
+uniform of E = max(2000, 20/κ) points with linear split per bin, carousel
+discrete-convolves with the Gaussian kernel in the grid, and interpolation
+of the curve at each observed c_i. Cost O(n + E²) — with κ=0.05,
+E=2000 → milliseconds at 255k points. Grid Rounding Error
+O(h²·|φ''|) with h= → 5e-4 negligible versus sample noise and
+study effect sizes (~1e-2). Verified with regression test
+against exact pairwise calculation on saturated tricolor data.
 
-- Para n ≤ _EXACT_LIMIT se conserva el cálculo pairwise EXACTO por punto
-  (ventana searchsorted ±5κ, peso del propio punto incluido); también se
-  usa como salida de 参考 en brute-force tests.
+- For n ≤ _EXACT_LIMIT the EXACT pairwise calculation per point is preserved
+(searchsorted window ± 5κ, weight of the point itself included); it is also
+used as output from 参考 in brute-force tests.
 
-- `include_self=False` queda disponible como ablation (excluye el peso
-  propio en la ventana).
+- `include_self=False` is available as ablation (excludes weight
+own in the window).
 
-Ambas métricas asumen top-label: `confidence` = probabilidad de la clase
-ganadora ∈ [0,1] y `correctness` ∈ {0,1} (o pesos en [0,1] para muestras
-ponderadas, p. ej. en estratos de carga).
+Both metrics assume top-label: `confidence` = probability of the class
+winner ∈ [0,1] and `correctness` ∈ {0,1} (or weights in [0,1] for samples
+weighted, e.g. in load strata).
 """
 
 from __future__ import annotations
@@ -54,9 +54,9 @@ def _sorted_confidence(
 
 
 def _scatter_grid(c: np.ndarray, y: np.ndarray, eval_points: int) -> np.ndarray:
-    """Distribuye masa de y sobre grilla uniforme con split lineal (canónico B&N).
+    """Distribute mass of and on a uniform grid with linear split (canonical B&W).
 
-    values[k] es la masa de y que encontró la tarea a la posición s_k = k/(E−1).
+values[k] is the mass of y that found the task at position s_k = k/(E−1).
     """
     bins = (c * (eval_points - 1)).astype(np.int64).clip(0, eval_points - 2)
     frac = c * (eval_points - 1) - bins
@@ -67,7 +67,7 @@ def _scatter_grid(c: np.ndarray, y: np.ndarray, eval_points: int) -> np.ndarray:
 
 
 def _kernel_curve_grid(c: np.ndarray, y: np.ndarray, bandwidth: float) -> np.ndarray:
-    """f̄(c_i) via grilla + convolución discreta + interpolación lineal."""
+    """f(c_i) via grid + discrete convolution + linear interpolation."""
     n = c.size
     eval_points = max(2000, int(round(20.0 / bandwidth)))
     values = _scatter_grid(c, y, eval_points)
@@ -78,8 +78,8 @@ def _kernel_curve_grid(c: np.ndarray, y: np.ndarray, bandwidth: float) -> np.nda
     smoothed = np.convolve(values, ker, mode="same")
     dens = np.convolve(_scatter_grid(c, np.ones_like(y), eval_points), ker, mode="same")
     denom = np.where(dens > 0.0, dens, 1.0)
-    ratio = smoothed / denom  # curva de fit en la grilla
-    # interpolación lineal en cada c_i observado
+    ratio = smoothed / denom  # fit curve on the grid
+    # linear interpolation at each observed c_i
     pos = c * (eval_points - 1)
     i0 = np.clip(pos.astype(np.int64), 0, eval_points - 2)
     w = pos - i0
@@ -87,7 +87,7 @@ def _kernel_curve_grid(c: np.ndarray, y: np.ndarray, bandwidth: float) -> np.nda
 
 
 def _curve_exact(c: np.ndarray, y: np.ndarray, bandwidth: float, radius_scale: float, include_self: bool) -> np.ndarray:
-    """Cálculo pairwise exacto por punto (ventana ±5κ searchsorted)."""
+    """Exact pairwise calculation per point (±5κ searchsorted window)."""
     n = c.size
     radius = bandwidth * radius_scale
     out = np.empty(n, dtype=np.float64)
@@ -98,13 +98,13 @@ def _curve_exact(c: np.ndarray, y: np.ndarray, bandwidth: float, radius_scale: f
         ci = c[i]
         lo, hi = int(lo_all[i]), int(hi_all[i])
         if include_self and hi - lo == 1:
-            # ventana = solo el punto propio → fit = y_i (límite κ→0 exacto)
+            # window = only the proper point → fit = y_i (exact limit κ→0)
             out[i] = y[i]
             continue
-        # pesos recalculados SIEMPRE contra el centro actual (ci):
-        # un enfoque de acumulador arrastrado congela el peso que el punto
-        # tenía al ENTRAR por el borde de la ventana (≈0) — bug v1 detectado
-        # con brute-force comparison y corregido aquí.
+        # recalculated weights ALWAYS against the current center (ci):
+        # a dragged accumulator approach freezes the weight that the point
+        # had when ENTERING through the edge of the window (≈0) — bug v1 detected
+        # with brute-force comparison and corrected here.
         w = np.exp(-0.5 * ((c[lo:hi] - ci) / bandwidth) ** 2)
         if not include_self and lo <= i < hi:
             w[i - lo] = 0.0
@@ -120,15 +120,15 @@ def smoothed_correctness_curve(
     radius_scale: float = 5.0,
     include_self: bool = True,
 ) -> np.ndarray:
-    """Retorna f̄(c_i) = Σ_j K((c_i−c_j)/κ) y_j / Σ_j K((c_i−c_j)/κ).
+    """Returns f (c_i) = Σ_j K((c_i−c_j)/κ) y_j / Σ_j K((c_i−c_j)/κ).
 
-    La CURVA DE FIT (reliability diagram suavizado de B&N): f̄(c) ≈ P(correct
-    | top-label confidence = c) en los puntos observados. smoothECE =
-    mean_i |c_i − f̄(c_i)|.
+The FIT (B&N Smoothed Reliability Diagram) CURVE: f ̂ (c) ≈ P(correct
+| top-label confidence = c) in the observed points. smoothECE =
+mean_i |c_i − f ̂ (c_i)|.
 
-    n ≤ _EXACT_LIMIT → pairwise exacto; n mayor → algoritmo canónico de
-    grilla de B&N (ver docstring del módulo). Los tests de regresión
-    comparan ambas rutas con tolerancia de grilla.
+n ≤ _EXACT_LIMIT → pairwise exact; n largest canonical → algorithm of
+b&N grid (see module docstring). Regression tests
+compare both routes with grid tolerance.
     """
     if bandwidth <= 0:
         raise ValueError(f"bandwidth debe ser > 0, got {bandwidth}")
@@ -148,10 +148,10 @@ def smooth_ece(
     radius_scale: float = 5.0,
     include_self: bool = True,
 ) -> float:
-    """smoothECE ≡ mean_i |c_i − f̄_κ(c_i)| con kernel RBF de ancho κ.
+    """smoothECE ≡ mean_i |c_i − f －_κ(c_i)| with κ-width RBF kernel.
 
-    Con κ→0 converge al error local (estimador sobre-fiteado); con κ→∞ al
-    |c_i − accuracy|. κ es una cantidad pre-registrada del plan v3.
+With κ→0 converges to the local error (over-phased estimator); with κ→∞ to
+|c_i − accuracy|. κ is a pre-registered amount from plan v3.
     """
     curve = smoothed_correctness_curve(
         confidence, correctness, bandwidth=bandwidth, radius_scale=radius_scale, include_self=include_self
@@ -161,8 +161,8 @@ def smooth_ece(
 
 
 def binned_ece(confidence: np.ndarray, correctness: np.ndarray, n_bins: float = 15) -> float:
-    """ECE binned clásico (para comparabilidad con la literatura; la cota del
-    plan v3 se enuncia SOLO sobre smoothECE porque el binned es discontinuo).
+    """Classic binned ECE (for comparability with the literature; the level of
+plan v3 is stated ONLY on smoothECE because the binned is discontinuous).
     """
     c, y = _sorted_confidence(confidence, correctness)
     if c.size == 0:

@@ -1,24 +1,24 @@
-"""F4 — Campaña del CUL-Bench (plan v3 §3.5–§3.6, §5).
+"""F4 — CUL-Bench campaign (plan v3 §3.5–§3.6, §5).
 
-Grid: γ × semilla × (métodos de entrenamiento × políticas de serving).
+Grid: γ × seed × (training methods × serving policies).
 
-Métodos de ENTRENAMIENTO del student (ablations del mismo trainer):
-- teacher:      el teacher mismo (referencia de calidad, B1)
-- B2:           student supervisado (sin KD)
-- B3a:          vanilla KD const-α + temp scaling del student (fairness E1)
-- B3b:          vanilla KD + oversampling de ejemplos difíciles (ciega a carga)
-- LCD:          α(s) + λ_conf + curriculum (método)
-- LCD_dagger:   LCD + bucle cerrado DAgger (OURS headline)
+Student TRAINING methods (ablations from the same trainer):
+- teacher: the teacher himself (quality reference, B1)
+- B2: supervised student (without KD)
+- B3a: vanilla KD const-α + temp scaling of the student (fairness E1)
+- B3b: vanilla KD + oversampling of difficult examples (load blind)
+- LCD: α(s) + λ_conf + resume (method)
+- LCD_dagger: LCD + closed loop DAgger (OURS headline)
 
-Políticas de SERVING (misma traza de test para todos):
-- teacher_always            → B1 (techo de calidad)
-- student_always            → B2/B3a/B3b/LCD servidos sin routing
-- fixed_threshold (sweep)   → B4 (mejor caso sobre val)
-- random_matched            → B5 (cobertura igualada al Schmitt)
-- schmitt                   → Ours (deadband κ-derivado)
+SERVING policies (same test trace for everyone):
+- teacher_always → B1 (quality ceiling)
+- student_always → B2/B3a/B3b/LCD served without routing
+- fixed_threshold (sweep) → B4 (best case over val)
+- random_matched → B5 (Schmitt-matched coverage)
+- schmitt → Ours (deadband κ-derived)
 
-Salida: JSONL por (γ, seed) — una fila por (method, policy). El B9-oráculo
-queda como pendiente documentada (DP sobre q discretizada).
+Output: JSONL for (γ, seed) — one row for (method, policy). The B9-oracle
+It remains as a documented slope (DP on discretized q).
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ class CampaignConfig:
     student_lr: float = 2e-3
     student_epochs: int = 4
     student_batch: int = 512
-    tau: float = 2.0                       # pre-registro (idéntico en todos)
+    tau: float = 2.0                       # pre-registration (identical in all)
     lam_conf: float = 0.1
     alpha_base: float = 0.5
     alpha_max: float = 2.0
@@ -83,11 +83,11 @@ class CampaignConfig:
     torch_threads: int = 1
 
     def stream_cfg(self, gamma: float) -> StreamConfig:
-        # Enmienda del pilot (2026-10-21, PRE-REGISTRATION §8): el punto
-        # operativo pre-registrado ρ_t(burst)=1.083 / ρ_s=0.941 se preserva
-        # EXACTO (κ/Δserv y deadband son ratios, invariante a escala); el
-        # factor artificial ×2.5 del servicio consume el 72% del SLA de 1.5 ms
-        # y saturaba viol% ~89% para TODOS los métodos. Física: escala real
+        # Pilot amendment (2026-10-21, PRE-REGISTRATION §8): the point
+        # pre-recorded operating ρ_t(burst)=1.083 / ρ_s=0.941 is preserved
+        # EXACT (κ/Δserv and deadband are ratios, scale invariant); he
+        # artificial service factor ×2.5 consumes 72% of the 1.5 ms SLA
+        # and saturated viol% ~89% for ALL methods. Physics: real scale
         # (service_scale=1.0, tasas ×2.5: 5000/35000, duty 0.25, L_max 1.5 ms).
         return StreamConfig(gamma=gamma, rate_idle=5000.0, rate_burst=35000.0)
 
@@ -106,9 +106,9 @@ def _student_cfg(cc: CampaignConfig, method: str) -> TrainStudentConfig:
                                   lam_conf=0.0, alpha_mode="const", **common)
     if method in ("B3a", "B3b"):
         # plan v3 §baselines: B3a = vanilla KD (post-hoc temp scaling);
-        # B3b = vanilla KD + oversampling ciego de errores (se hace en
-        # _train_student_method): MISMA pérdida que B3a (α const, λ_conf=0),
-        # solo cambia el dataset. El artifact_name evita colisión con B3a.
+        # B3b = vanilla KD + blind error oversampling (done in
+        # _train_student_method): SAME loss as B3a (α const, λ_conf=0),
+        # only the dataset changes. The artifact_name avoids collision with B3a.
         return TrainStudentConfig(alpha_mode="const", lam_conf=0.0,
                                   curriculum=False,
                                   artifact_name="B3b_kd_blind_oversample"
@@ -141,8 +141,8 @@ def _train_student_method(
         tgt = precompute_targets(teacher.net, ds["train"].features, ds["train"].s,
                                  teacher.temperatures, fname.tau)
     if method == "B3b":
-        # oversampling CIEGO a carga: duplica eventos que el teacher ERRÓ (by
-        # argmax de las cabezas) — sin tomar el estado s en cuenta
+        # BLIND oversampling to load: duplicates events that the teacher FAILED (by
+        # argmax of heads) — without taking state s into account
         with torch.no_grad():
             zT = teacher.net(ds["train"].features, ds["train"].s, mode="teacher")["t"]
             from .losses import corn_pmf
@@ -237,7 +237,7 @@ def run_cell(gamma: float, seed: int, cc: CampaignConfig) -> list[dict]:
                      "policy": "training",
                      "student_smoothECE": art.metrics["smoothECE"],
                      "student_auroc": art.metrics["auroc_gate"]})
-    # ---- serving: student-only (B2/B3a/B3b/LCD servidos de forma fija)
+    # ---- serving: student-only (B2/B3a/B3b/LCD served permanently)
     mS = _deploy(nets["LCD"], StudentAlways(), bundle.samples["test"], labels,
                  lat, ds_deploy, (mu, sd), tiles, cc.smooth_bw)
     _row("LCD", "student_always", mS)
@@ -251,7 +251,7 @@ def run_cell(gamma: float, seed: int, cc: CampaignConfig) -> list[dict]:
                   lat, ds_deploy, (mu, sd), tiles, cc.smooth_bw)
     _row("B3b", "student_always", mS4)
 
-    # ---- Ours schmitt con nuestro student (HEADLINE)
+    # ---- Ours schmitt with our student (HEADLINE)
     import json as _json
     report = _json.loads(open(_LAT[1]).read())
     d = None
@@ -261,8 +261,8 @@ def run_cell(gamma: float, seed: int, cc: CampaignConfig) -> list[dict]:
                                        service_scale=cc.sim.service_scale)
     rc = RouterConfig(q_on=d["q_on"], q_off=d["q_off"], min_dwell=1.0,
                       latency_refractory=2.0)
-    # el router es ESTADOFUL: una instancia fresca por deploy (el autómata
-    # no debe arrastrar narrow/guard entre corridas — bug del pilot v1)
+    # the router is FULL STATE: a fresh instance per deploy (the automaton
+    # you should not drag narrow/guard between runs — pilot v1 bug)
     mO = _deploy(nets["LCD_dagger"], copy.deepcopy(SchmittRouter(rc, q_ref=sim_cfg.batch_size)),
                  bundle.samples["test"], labels, lat, ds_deploy, (mu, sd), tiles,
                  cc.smooth_bw)
@@ -273,12 +273,12 @@ def run_cell(gamma: float, seed: int, cc: CampaignConfig) -> list[dict]:
     _row("LCD", "schmitt", mO2)
     cov = mO["serve"]["student_coverage"]
 
-    # ---- B5 random con cobertura igualada
+    # ---- B5 random with equal coverage
     mR = _deploy(nets["LCD"], RandomMatched(cov, seed=seed), bundle.samples["test"],
                  labels, lat, ds_deploy, (mu, sd), tiles, cc.smooth_bw)
     _row("LCD", "random_matched", mR)
 
-    # ---- B4 fixed threshold sweep mejor caso por val
+    # ---- B4 fixed threshold sweep best case by val
     best = None
     sim_val = copy.deepcopy(sim_cfg)
     sim_val.t_end = cc.horizons["val"]
@@ -301,7 +301,7 @@ def run_cell(gamma: float, seed: int, cc: CampaignConfig) -> list[dict]:
 
     for r in rows:
         r["wall_s"] = round(time.time() - t0, 1)
-    # artefactos para análisis F5 (δ(s), ventanas de transiente, figuras)
+    # artifacts for F5 analysis (δ(s), transient windows, figures)
     out = Path(cc.out_dir)
     nets_dir = out / "nets"
     nets_dir.mkdir(parents=True, exist_ok=True)
@@ -312,7 +312,7 @@ def run_cell(gamma: float, seed: int, cc: CampaignConfig) -> list[dict]:
     return rows
 
 
-# estado por proceso (lat report cargado una vez)
+# status per process (lat report loaded once)
 _LAT: tuple[LatencyModel | None, str] = (None, "results/latency_report.json")
 
 

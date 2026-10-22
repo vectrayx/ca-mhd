@@ -1,13 +1,13 @@
-"""Fase A — Entrenamiento del teacher calibrado (plan v3 §3.3).
+"""Phase A — Calibrated Teacher Training (Plan v3 §3.3).
 
-- Kendall homoscedástico por cabeza (gate/choice/corn) con máscara de
-  actividad en corn (solo muestras de ataque).
-- Temperature scaling por cabeza sobre VAL, espacio ESCALADO (desplegado).
-- Criterio G1 del gate: smoothECE ≤ 1% por cabeza Y por estrato de carga.
-- Punto near-the-margin (E4): el teacher se construye con capacidad
-  ajustada; el `attack_radius` del stream controla el margen.
-- Artefacto self-contained: {net state, ArchConfig, StreamConfig, temps,
-  kendall lv, estandarización, métricas}.
+- Kendall homoscedastic per head (gate/choice/corn) with mask of
+activity in corn (attack samples only).
+- Temperature scaling per head over VAL, SCALED space (deployed).
+- Gate G1 criterion: smoothECE ≤ 1% per head and per load layer.
+- Near-the-margin point (E4): the teacher is built with capacity
+adjusted; the `attack_radius` of the stream controls the margin.
+- Self-contained artifact: {net state, ArchConfig, StreamConfig, temps,
+kendall lv, standardization, metrics}.
 """
 
 from __future__ import annotations
@@ -106,15 +106,15 @@ def _teacher_losses(t_out: dict[str, torch.Tensor], batch) -> dict[str, torch.Te
     if attack.any():
         rank = batch["sev"][attack] - 1
         corn_l = corn_loss(t_out["corn"][attack], rank)
-    else:  # cabeza inactiva en el batch: tensor cero conectado al grafo
+    else:  # head idle in batch: zero tensor connected to graph
         corn_l = t_out["corn"].sum() * 0.0
     return {"gate": gate_ce, "choice": choice_ce, "corn": corn_l}
 
 
 @torch.no_grad()
 def _calibrated_pairs(net: CAMHDNet, ds: ReplayDataset, temps, head: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """(conf, correctness, válido) a longitud completa, espacio desplegado.
-    Para 'corn' los no-ataques marcan válido=False."""
+    """(conf, correctness, valid) to full length, unfolded space.
+For 'corn' the non-attacks mark valid=False."""
     t = net(ds.features, ds.s, mode="teacher")["t"]
     valid = np.ones(len(ds), dtype=bool)
     if head == "gate":
@@ -130,7 +130,7 @@ def _calibrated_pairs(net: CAMHDNet, ds: ReplayDataset, temps, head: str) -> tup
         conf_full, pred = pmf.max(-1).values, pmf.argmax(-1)
         y_rank = ds.severity - 1
         corr = (pred == y_rank).float()
-        valid = (ds.gate == 1).numpy()      # cabezal ordinal: solo ataques
+        valid = (ds.gate == 1).numpy()      # ordinal head: attacks only
         return conf_full.cpu().numpy(), corr.cpu().numpy(), valid
     else:
         raise ValueError(head)
@@ -139,8 +139,8 @@ def _calibrated_pairs(net: CAMHDNet, ds: ReplayDataset, temps, head: str) -> tup
 
 def smooth_ece_by_head_stratum(net: CAMHDNet, ds: ReplayDataset, temps,
                                bw: float) -> dict[str, dict[str, float]]:
-    """smoothECE por cabeza × estrato (all + {calm, warm, hot} por cuantiles
-    de q). CORN solo ataques."""
+    """smoothECE per head × stratum (all + {calm, warm, hot} per quantiles
+of q). CORN only attacks."""
     net.eval()
     out: dict[str, dict[str, float]] = {}
     strata = {"all": np.ones(len(ds), dtype=bool)}
@@ -202,9 +202,9 @@ def train_teacher(
             print(f"[teacher] ep {epoch}: loss {np.mean(ep_losses):.4f} "
                   f"gate_acc {np.mean(ep_gate_acc):.4f}")
 
-    # calibración (val) + métricas (test)
-    # Enmienda 2: T por cabeza minimizando el smoothECE de val (el criterio
-    # G1 del pre-registro); el argmax es invariante a T (escala positiva).
+    # calibration (val) + metrics (test)
+    # Amendment 2: T per head minimizing the smoothECE of val (the criterion
+    # G1 of the pre-registration); the argmax is invariant at T (positive scale).
     with torch.no_grad():
         tv = net(val.features, val.s, mode="teacher")["t"]
     val_attack = val.gate == 1

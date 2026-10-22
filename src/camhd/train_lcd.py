@@ -1,17 +1,17 @@
-"""Fase B — Entrenamiento del student por destilación (plan v3 §3.3).
+"""Phase B — Student training by distillation (plan v3 §3.3).
 
 LCD = L = Σ_q kendall(L_q; σ_q) + α(s)·KL_τ(T‖S) + λ_conf·L_conf-cal
 
-- τ (pre-registrado) aplicado a AMBOS lados (también en el student) — la
-  misma temperatura para todos los métodos.
-- CORN: soft-target ordinal con la pmf del teacher templada.
-- Los baselines del plan son ABLATIONS del mismo trainer (higiene):
-    use_kd=False        → B2  student-only (supervisado estrecho)
-    alpha_mode="const"  → B3a vanilla KD (importancia de estado ignorada)
-    alpha_mode="s"      → LCD (método: importancia condicionada a carga)
-    λ_conf>0 con α const → B3b KD + término de calibración
-- Gradiente fluye SOLO por student-heads + trunk (G3): teacher congelado.
-- Teacher-targets precalculados una vez por teacher (con no_grad).
+- τ (pre-registered) applied to BOTH sides (also on the student) — the
+same temperature for all methods.
+- CORN: soft-target ordinal with the pmf of the teacher tempered.
+- The baselines of the plan are ABLATIONS of the same trainer (hygiene):
+use_kd=False → B2 student-only (narrow supervised)
+alpha_mode="const" → B3a vanilla KD (state importance ignored)
+alpha_mode="s" → LCD (method: load conditional importance)
+λ_conf>0 with α const → B3b KD + calibration term
+- Gradient flows ONLY through student-heads + trunk (G3): teacher frozen.
+- Teacher-targets precomputed once per teacher (with no_grad).
 """
 
 from __future__ import annotations
@@ -40,12 +40,12 @@ _HN = ("gate", "choice", "corn")
 
 @dataclass
 class TrainStudentConfig:
-    tau: float = 2.0                 # pre-registro (idéntico en todos los métodos)
+    tau: float = 2.0                 # pre-registration (identical in all methods)
     lam_conf: float = 0.1
     alpha_base: float = 0.5
     alpha_max: float = 2.0
     alpha_mode: str = "s"            # "s" (LCD) | "const" (vanilla KD) | "none"
-    curriculum: bool = True          # época 0 con mezcla global (Fase B)
+    curriculum: bool = True          # epoch 0 with global mixing (Phase B)
     use_kd: bool = True              # False = B2 (student supervisado)
     epochs: int = 4
     batch_size: int = 512
@@ -54,7 +54,7 @@ class TrainStudentConfig:
     smooth_bw: float = 0.05
     device: str = "cpu"
     log: bool = True
-    artifact_name: str | None = None   # override del nombre del artefacto (B3b)
+    artifact_name: str | None = None   # artifact name override (B3b)
 
     def variant_name(self) -> str:
         if self.artifact_name is not None:
@@ -78,7 +78,7 @@ class StudentArtifact:
     kendall_lv: dict[str, float]
     config: TrainStudentConfig
     metrics: dict
-    teacher_temps: dict[str, float]     # kindpl del teacher usado en destilación
+    teacher_temps: dict[str, float]     # teacher's kindpl used in distillation
 
     def save(self, path: str | Path) -> None:
         torch.save({
@@ -108,7 +108,7 @@ def load_student_artifact(path: str | Path) -> StudentArtifact:
 @torch.no_grad()
 def precompute_targets(net: CAMHDNet, xs: torch.Tensor, ss: torch.Tensor,
                        temps: dict[str, float], tau: float) -> dict[str, torch.Tensor]:
-    """Soft-targets del teacher, espacio escalado, templados a τ. Batch-eficiente."""
+    """Teacher soft-targets, scaled space, tempered to τ. Batch-efficient."""
     net.eval()
     N = xs.size(0)
     outs: dict[str, torch.Tensor] = {
@@ -127,7 +127,7 @@ def precompute_targets(net: CAMHDNet, xs: torch.Tensor, ss: torch.Tensor,
 
 def smooth_ece_strata(net: CAMHDNet, ds: ReplayDataset, temps,
                       bw: float, mode: str = "student") -> dict[str, dict[str, float]]:
-    """smoothECE por cabeza × estrato del mode dado (student o teacher)."""
+    """smoothECE per head × stratum of the given mode (student or teacher)."""
     net.eval()
     out: dict[str, dict[str, float]] = {}
     with torch.no_grad():
@@ -171,11 +171,11 @@ def train_student(
     stream_cfg: StreamConfig,
     teacher_temps: dict[str, float],
 ) -> StudentArtifact:
-    """Entrena student-heads (+trunk) sobre el replay con la pérdida elegida.
+    """Train student-heads (+trunk) on the replay with the chosen loss.
 
-    `net` es el MISMO modelo del teacher (cabezas anchas congeladas); el
-    caller debe haber aplicado set_requires_grad fresco — el trainer lo
-    fuerza aquí.
+`net` is the SAME model as the teacher (frozen broadheads); he
+caller should have applied fresh set_requires_grad — the trainer will do it
+strength here.
     """
     torch.manual_seed(run_cfg.train_seed)
     device = torch.device(tsc.device)
@@ -217,7 +217,7 @@ def train_student(
             out = net(x, s, mode="student")["s"]
             att = ds.gate[idx_t] == 1
 
-            # ground-truth losses (por cabeza, corn máscarado a ataques)
+            # ground-truth losses (per head, corn masked to attacks)
             l_gate = F.cross_entropy(out["gate"], ds.gate[idx_t])
             l_choice = F.cross_entropy(out["choice"], ds.choice[idx_t])
             if att.any():
@@ -232,11 +232,11 @@ def train_student(
                 z_s = {
                     "gate": out["gate"] / tau,
                     "choice": out["choice"] / tau,
-                    "corn": out["corn"] / tau,   # logs para soft ordinal
+                    "corn": out["corn"] / tau,   # logs for soft ordinal
                 }
-                # α(s): canal de carga = q escalado (0..1), ambos lados a τ.
-                # Curriculum de la Fase B (plan §3.3): la ÉPOCA 0 usa mezcla
-                # global (α const) y de ahí los estratos de cola entran.
+                # α(s): loading channel = q scaled (0..1), both sides at τ.
+                # Phase B curriculum (plan §3.3): TIME 0 uses blend
+                # global (α const) and from there the tail strata enter.
                 if tsc.curriculum and epoch == 0:
                     a_s = torch.full_like(s[:, 0], tsc.alpha_base)
                 elif tsc.alpha_mode == "const":
@@ -246,9 +246,9 @@ def train_student(
                     a_s = tsc.alpha_base + (tsc.alpha_max - tsc.alpha_base) * s_frac
                 kd_gate = -(tg["gate"][idx_t] * F.log_softmax(z_s["gate"], -1)).sum(-1)
                 kd_choice = -(tg["choice"][idx_t] * F.log_softmax(z_s["choice"], -1)).sum(-1)
-                # CORN: los targets del teacher solo son válidos en ataques
-                # (su propia pérdida de entrenamiento fue máscarada); el KD de
-                # corn se máscaras igual — sobre benignos serían ruido (K2)
+                # CORN: teacher targets are only valid in attacks
+                # (his own training loss was masked); the KD of
+                # corn if masks are the same — about benign they would be noise (K2)
                 if att.any():
                     kd_corn = corn_soft_loss_from_pmf(z_s["corn"][att],
                                                       tg["corn"][idx_t][att])
@@ -264,7 +264,7 @@ def train_student(
                     conf_t = tg["gate"][idx_t].max(-1).values
                     base = base + tsc.lam_conf * F.mse_loss(conf_s, conf_t.detach())
             elif not tsc.use_kd:
-                pass  # B2: solo supervisado
+                pass  # B2: supervised only
 
             opt.zero_grad(set_to_none=True)
             base.backward()
@@ -278,7 +278,7 @@ def train_student(
             print(f"[student:{tsc.variant_name()}] ep {epoch}: "
                   f"loss {np.mean(ep['loss']):.4f} gate_acc {np.mean(ep['gate_acc']):.4f}")
 
-    # ---- calibración del student (val) + métricas (test)
+    # ---- student calibration (val) + metrics (test)
     with torch.no_grad():
         zval = net(val.features, val.s, mode="student")["s"]
     from .calibration import fit_temperatures
@@ -308,7 +308,7 @@ def train_student(
 
 def corn_soft_loss_from_pmf(student_corn_logits: torch.Tensor,
                             teacher_pmf_tau: torch.Tensor) -> torch.Tensor:
-    """CE ordinal de destilación: los logits del student YA están templados a
-    τ; el pmf del target viene del teacher templado."""
+    """Distillation ordinal CE: the student logits are ALREADY tempered to
+τ; the pmf of the target comes from the tempered teacher."""
     from .losses import corn_soft_loss
     return corn_soft_loss(student_corn_logits, teacher_pmf_tau)

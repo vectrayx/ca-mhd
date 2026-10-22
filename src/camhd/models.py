@@ -1,15 +1,15 @@
-"""Arquitectura CA-MHD (plan v3 §3.1, resolución M4).
+"""CA-MHD architecture (v3 plan §3.1, M4 resolution).
 
-- UN trunk MLP pre-norm compartido: corre SIEMPRE y queda caliente en caché
-  (base del κ_switch pequeño).
-- Teacher: cabezas anchas (Gate BCE, Choice CE, Severity CORN).
-- Student-mode: SOLO las cabezas cambian a versión estrecha (factor 1/8 por
-  defecto). El orden de downshift por head es por costo medido (microbench).
-- Variante B (trunk estrecho adicional) se decide con la medición R5: si el
-  trunk domina >70% de FLOPs, es obligatoria — la decisión es AUTOMATIZABLE
-  aquí vía `flops_share` y `use_student_trunk`.
+- A shared pre-norm MLP trunk: ALWAYS runs and stays hot in the cache
+(small κ_switch base).
+- Teacher: wide heads (Gate BCE, Choice CE, Severity CORN).
+- Student-mode: ONLY heads switch to narrow version (factor 1/8 per
+defect). The order of downshift by head is by measured cost (microbench).
+- Variant B (additional narrow trunk) is decided with the R5 measurement: if the
+trunk dominates >70% of FLOPs, it is mandatory — the decision is AUTOMATIZABLE
+here via `flops_share` and `use_student_trunk`.
 
-Espacio de logits: ESCALADO (desplegado) en toda la teoría y las mediciones.
+Logit space: SCALING (unfolding) across theory and measurements.
 """
 
 from __future__ import annotations
@@ -29,11 +29,11 @@ class ArchConfig:
     s_dim: int = 3                 # S_infra = (q_t, λ_t, ℓ_p95_t) ∈ R³ (input del trunk)
     w: int = 64                    # anchura del trunk (teacher)
     depth: int = 2                 # bloques del trunk
-    student_frac: float = 0.125    # fracción de anchura de las cabezas student
-    head_mult: float = 4.0         # anchura oculta de las cabezas del teacher = w·head_mult
+    student_frac: float = 0.125    # fraction of width of student heads
+    head_mult: float = 4.0         # hidden width of teacher's heads = w·head_mult
     n_gate: int = 2                # benigno/ataque (BCE 2-logit softmax)
     n_choice: int = 4              # 0 benign + K-1 subtipos (Choice CE)
-    n_sev: int = 3                 # niveles ordinales CORN (unidades = n_sev−1)
+    n_sev: int = 3                 # ordinal levels CORN (units = n_sev−1)
     dropout: float = 0.0
     student_trunk_frac: float | None = None  # variante B: None = trunk compartido
 
@@ -54,7 +54,7 @@ class PreNormBlock(nn.Module):
 
 
 class CornHead(nn.Module):
-    """CORN ordinal: unidades = C−1 (acumuladas σ(z_k) = P(y ≥ k))."""
+    """Ordinal CORN: units = C−1 (cumulative σ(z_k) = P(y ≥ k))."""
 
     def __init__(self, w: int, units: int, bias_init: tuple[float, ...] = (1.0, 0.0, -1.0)) -> None:
         super().__init__()
@@ -69,8 +69,8 @@ class CornHead(nn.Module):
 
 def _mlp_head(w_in: int, w_hidden: int, out: int, dropout: float,
               corn_units: int | None = None) -> nn.Module:
-    """Cabeza: bottleneck estrecho (student) o directo. CORN usa unidades
-    acumuladas; para el modo estrecho, Linear(w_in→w_hidden) + CornHead."""
+    """Head: narrow (student) or direct bottleneck. CORN uses units
+accumulated; for narrow mode, Linear(w_in→w_hidden) + CornHead."""
     if corn_units is not None:
         if w_hidden == w_in:
             return CornHead(w_in, corn_units)
@@ -79,10 +79,10 @@ def _mlp_head(w_in: int, w_hidden: int, out: int, dropout: float,
 
 
 class CAMHDNet(nn.Module):
-    """Red única con trunk compartido + cabezas anchas (teacher) + estrechas (student).
+    """Single network with shared trunk + wide heads (teacher) + narrow heads (student).
 
-    forward(x, mode="both") → dict con claves "t"/"s" (teacher/student):
-        {"t": {gate, choice, corn}, "s": {gate, choice, corn}}
+forward(x, mode="both") → dict with keys "t"/"s" (teacher/student):
+{"t": {gate, choice, corn}, "s": {gate, choice, corn}}
     """
 
     def __init__(self, cfg: ArchConfig) -> None:
@@ -95,33 +95,33 @@ class CAMHDNet(nn.Module):
         for _ in range(cfg.depth - 1):
             self.trunk.append(PreNormBlock(cfg.w, cfg.w, cfg.dropout))
 
-        # cabezas del teacher (anchas: hidden = w·head_mult — el cómputo domina
-        # en serving; el gap teacher/student del DES sale de aquí)
+        # teacher heads (wide: hidden = w·head_mult — computation dominates
+        # in serving; the DES gap teacher/student comes from here)
         h_t = int(round(cfg.w * cfg.head_mult))
         self.t_gate = _mlp_head(cfg.w, h_t, cfg.n_gate, cfg.dropout)
         self.t_choice = _mlp_head(cfg.w, h_t, cfg.n_choice, cfg.dropout)
         self.t_corn = _mlp_head(cfg.w, cfg.w, 0, cfg.dropout, corn_units=cfg.n_sev - 1)
 
-        # cabezas del student (estrechas) — sobre el MISMO trunk (variante A)
+        # student heads (narrow) — on the SAME trunk (variant A)
         self.s_gate = _mlp_head(cfg.w, w_s, cfg.n_gate, cfg.dropout)
         self.s_choice = _mlp_head(cfg.w, w_s, cfg.n_choice, cfg.dropout)
         self.s_corn = _mlp_head(cfg.w, w_s, 0, cfg.dropout, corn_units=cfg.n_sev - 1)
 
-        # variante B (trunk estrecho adicional): opcional
+        # variant B (additional narrow trunk): optional
         self._student_trunk: nn.ModuleList | None = None
         if cfg.student_trunk_frac is not None:
             w_bt = max(4, int(round(cfg.w * cfg.student_trunk_frac)))
             bt: nn.ModuleList = nn.ModuleList([PreNormBlock(d_in, w_bt, cfg.dropout)])
             bt += [PreNormBlock(w_bt, w_bt, cfg.dropout) for _ in range(cfg.depth - 1)]
             self._student_trunk = bt
-            # cabezas student recableadas al trunk estrecho
+            # student heads rewired to narrow trunk
             self.s_gate = _mlp_head(w_bt, max(4, min(w_s, w_bt)), cfg.n_gate, cfg.dropout)
             self.s_choice = _mlp_head(w_bt, max(4, min(w_s, w_bt)), cfg.n_choice, cfg.dropout)
             self.s_corn = _mlp_head(w_bt, max(4, min(w_s, w_bt)), 0, cfg.dropout, corn_units=cfg.n_sev - 1)
 
     def forward(self, x: torch.Tensor, s: torch.Tensor | None = None,
                 mode: str = "both") -> dict[str, dict[str, torch.Tensor]]:
-        """x: [B,d]; s: [B,s_dim] estado de infra (zeros si None)."""
+        """x: [B,d]; s: [B,s_dim] infra state (zeros if None)."""
         if s is None:
             s = torch.zeros(x.size(0), self.cfg.s_dim, device=x.device, dtype=x.dtype)
         h_in = torch.cat([x, s], dim=-1)
@@ -137,16 +137,16 @@ class CAMHDNet(nn.Module):
                 for blk in self._student_trunk:
                     h_s = blk(h_s)
             else:
-                h_s = h  # trunk compartido SIEMPRE caliente
+                h_s = h  # shared trunk ALWAYS HOT
             out["s"] = {"gate": self.s_gate(h_s), "choice": self.s_choice(h_s), "corn": self.s_corn(h_s)}
         return out
 
     def forward_heads(self, x: torch.Tensor, s: torch.Tensor | None = None,
                       narrow_heads: tuple[str, ...] = ()) -> dict[str, torch.Tensor]:
-        """Path de SERVING: trunk compartido + cada cabeza en su modo.
+        """SERVING path: shared trunk + each head in its mode.
 
-        narrow_heads: nombres de cabezas que corren en versión estrecha
-        (student). El router Schmitt por cabeza controla este conjunto.
+narrow_heads: names of heads running in narrow version
+(student). The Schmitt router per head controls this set.
         """
         if s is None:
             s = torch.zeros(x.size(0), self.cfg.s_dim, device=x.device, dtype=x.dtype)
@@ -180,8 +180,8 @@ class CAMHDNet(nn.Module):
         return [p for n, p in self.named_parameters() if n.startswith("trunk")]
 
     def set_requires_grad(self, heads: set[str]) -> None:
-        """Congela/descongela por head para el entrenamiento consistente con
-        el autómata de despliegue (plan G3): {'t', 's', 'trunk'}.
+        """Freeze/thaw by head for training consistent with
+deployment automaton (G3 plan): {'t', 's', 'trunk'}.
         """
         for n, p in self.named_parameters():
             key = n.split(".", 1)[0].lstrip("_")
@@ -206,8 +206,8 @@ class CAMHDNet(nn.Module):
         raise ValueError(which)
 
     def flops_forward(self, batch: int = 1) -> dict[str, int]:
-        """Cuenta FLOPs (MACs×2 aproximado) del forward por modo — insumo de R5
-        (decisión de variante B) y de la tabla de FLOPs del paper.
+        """Forward FLOPs (approximate MACs×2) count by mode — R5 input
+(decision of variant B) and the table of FLOPs of the paper.
         """
         d_in = self.cfg.trunk_input()
         h_t = int(round(self.cfg.w * self.cfg.head_mult))

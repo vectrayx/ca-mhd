@@ -1,9 +1,9 @@
-"""Temperature scaling por cabeza sobre el espacio desplegado (plan v3 §3.1).
+"""Temperature scaling per head over the deployed space (plan v3 §3.1).
 
-- Gate/Choice: 1D T, CE sobre el val de calibración.
-- CORN: T conjunta sobre las unidades (severidad).
-Grid log-uniforme burdo + sección dorada (tol ~1e-3). El artefacto guarda
-T por cabeza; TODA la teoría/medición usa los logits escalados.
+- Gate/Choice: 1D T, CE on the calibration val.
+- CORN: T joint over the units (severity).
+Grid log-uniform coarse + golden section (tol ~1e-3). Artifact saves
+T per head; ALL theory/measurement uses scaled logits.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ class Temperatures(dict):
 
 def _grid_golden(loss_fn, lo: float = 0.05, hi: float = 20.0, n_grid: int = 200,
                  tol: float = 1e-3) -> float:
-    """Grid log-uniforme en T + refinamiento por sección dorada."""
+    """Log-uniform grid in T + refinement by golden section."""
     ts = torch.exp(torch.linspace(math.log(lo), math.log(hi), n_grid))
     with torch.no_grad():
         losses = [loss_fn(float(t)) for t in ts]
@@ -55,13 +55,13 @@ def fit_temperatures(
     objective: str = "nll",
     bandwidth: float = 0.05,
 ) -> Temperatures:
-    """Ajusta T por cabeza en val.
+    """Adjust T per head in val.
 
-    objective="nll": minimiza la NLL de calibración (original, Guo et al.).
-    objective="smooth_ece": minimiza el smoothECE de val (el criterio G1 del
-    pre-registro). El argmax es INVARIANTE a T (escala positiva), así que la
-    re-optimización solo repara la CONFIANZA top-label — exactamente el
-    objeto del contrato. CORN usa la loss ordinal o el smoothECE del pmf.
+objective=“nll”: minimizes calibration NLL (original, Guo et al.).
+objective="smooth_ece": minimizes the smoothECE of val (criterion G1 of the
+pre-registration). The argmax is INVARIANT at T (positive scale), so the
+re-optimization only repairs top-label TRUST — exactly the
+object of the contract. CORN uses the ordinal loss or the smoothECE of the pmf.
     """
     from .losses import corn_loss, corn_pmf
     from .smooth_ece import smooth_ece

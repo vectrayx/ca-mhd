@@ -1,16 +1,16 @@
-"""Router con histéresis (Schmitt trigger) + gobernanza del canal de latencia.
+"""Router with hysteresis (Schmitt trigger) + latency channel governance.
 
-Diseño del plan v3 §3.4 (correcciones G4):
-- Autómata por cabeza REUSABLE con zona muerta [q_off, q_on).
-- `min_dwell`: tiempo mínimo en modo tras conmutar (anti-flapping residual
-  que la zona muerta NO cubre: q oscilando por encima de q_on con picos no
-  debe conmutar y des-comutar en milisegundos).
-- `LatencyGuard`: ℓ_p95 rodante con EMA + deadband de cambio mínimo +
-  periodo refractario tras cada conmutación — protege contra el loop
-  oscilario: switch → spike de latencia (κ real) → ℓ_p95 dispara → switch
-  de vuelta.
-- El costo online es solo lo observable (violación SLA + conmutación), Prop 3
-  v3: el registrado aquí es exactamente esa señal contable.
+Plan design v3 §3.4 (G4 corrections):
+- REUSABLE head automaton with dead zone [q_off, q_on).
+- `min_dwell`: minimum time in mode after switching (residual anti-flapping
+that the dead zone does not cover: q oscillating above q_on with peaks not
+must toggle and toggle in milliseconds).
+- `LatencyGuard`: ℓ_p95 rolling with EMA + minimum shift deadband +
+refractory period after each switch — protects against looping
+oscillator: latency → spike switch (κ real) → ℓ_p95 triggers → switch
+Back
+- Online cost is only observable (SLA violation + switching), Prop 3
+v3: the one recorded here is exactly that accounting signal.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ class SwitchRecord:
 
 
 class SchmittTrigger:
-    """Autómata TEACHER→STUDENT con histéresis doble y dwell mínimo."""
+    """TEACHER→STUDENT Automaton with double hysteresis and minimal dwell."""
 
     def __init__(self, cfg: RouterConfig, name: str = "head") -> None:
         if not 0.0 <= cfg.q_off < cfg.q_on <= 1.0:
@@ -72,8 +72,8 @@ class SchmittTrigger:
         return True
 
     def update(self, q: float, t: float) -> bool:
-        """Evalúa el trigger con la profundidad de cola actual. Retorna True
-        ssi conmutó (el caller debe contabilizar el costo κ_switch).
+        """Evaluates the trigger with the current queue depth. Returns True
+if switched (the caller must account for the κ_switch cost).
         """
         if not np.isfinite(q):
             return False
@@ -88,14 +88,14 @@ class SchmittTrigger:
         return len(self.records)
 
     def student_coverage(self, t_end: float | None = None) -> float:
-        """Fracción temporal en modo student desde t=0."""
+        """Temporal fraction in student mode from t=0."""
         if not self.records:
             return 0.0
         end = t_end if t_end is not None else self.records[-1].t
         if end <= 0:
             return 0.0
         total = 0.0
-        # recorrer intervalos: student desde el t de switch-to-student hasta el
+        # traverse intervals: student from switch-to-student t to
         # siguiente switch-to-teacher (o end)
         cur_start: float | None = None
         for r in self.records:
@@ -110,24 +110,24 @@ class SchmittTrigger:
 
 
 class LatencyGuard:
-    """ digsCondición del canal de latencia: EMA de ℓ_p95 + deadband +
-    periodo refractario tras conmutación. No toma decisiones — entrega
-    `saturated_signal` que el调用 router puede usar para bloquear acciones
-    motivadas por latencia mientras el pico por κ_switch se metaboliza.
+    """digsLatency channel condition: EMA of ℓ_p95 + deadband +
+refractory period after switching. Does not make decisions — delivery
+`saturated_signal` that the调用 router can use to block actions
+driven by latency while the peak by κ_switch is metabolized.
     """
 
     def __init__(self, cfg: RouterConfig) -> None:
         self.cfg = cfg
         self._ema: float | None = None
         self._last_switch_t: float = float("-inf")
-        self.baseline: float | None = None  # ℓ de referencia (régimen estable)
+        self.baseline: float | None = None  # Reference ℓ (stable regime)
 
     def on_switch(self, t: float) -> None:
         self._last_switch_t = t
 
     def feeding(self, lp95: float, t: float) -> float | None:
-        """Actualiza la señal rodante; retorna Δ normalizado contra baseline
-        (0 si aún no hay baseline). None si el canal está en refractario.
+        """Updates rolling signal; returns normalized Δ against baseline
+(0 if no baseline yet). None if the channel is in refractory.
         """
         if not (np.isfinite(lp95) and np.isfinite(t)):
             raise ValueError(f"lp95/t no finitos: {lp95}, {t}")
@@ -142,7 +142,7 @@ class LatencyGuard:
 
     @property
     def saturated(self) -> float | None:
-        """Δ actual si excede el deadband, si no 0.0 (o None en refractario)."""
+        """Current Δ if it exceeds the deadband, if not 0.0 (or None in refractory)."""
         if self._ema is None or self.baseline is None:
             return None
         delta = (self._ema - self.baseline) / max(self.baseline, 1e-12)

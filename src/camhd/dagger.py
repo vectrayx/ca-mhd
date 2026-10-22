@@ -1,18 +1,18 @@
-"""Fase C — DAgger condicionado (plan v3 §3.3).
+"""Phase C — Conditioned DAgger (plan v3 §3.3).
 
-Iteración:
-1. ROLLOUT: DES con el student actual + SchmittRouter sobre el split de
-   rollout (stream fresco). El s_vec registrado por el DES es el estado REAL
-   bajo la política activa (no el del glass box de entrenamiento).
-2. EVENTOS DANGER: cabezas servidas en modo student con predicción errada
-   (gate/choice/corn). Ground-truth disponible (stream sintético) — DAgger
-   legítimo, no requiere anotador.
-3. Los danger events se SOBREMUESTREAN (×oversample)ayed al replay train
-   con sus s_vec desplegados, y se re-destila. Tras 2–3 iteraciones el
-   student corrige exactamente los estados donde el despliegue lo usa mal.
+Iteration:
+1. ROLLOUT: DES with the current student + SchmittRouter on the split
+rollout (fresh stream). The s_vec recorded by DES is the REAL state
+under the active policy (not the training glass box).
+2. DANGER EVENTS: heads served in student mode with wrong prediction
+(gate/choice/corn). Ground-truth available (synthetic stream) — DAgger
+legitimate, does not require an annotator.
+3. Danger events are OVERSAMPLED (×oversample) on the replay train
+with its s_vec deployed, and is re-distilled. After 2–3 iterations the
+student fixes exactly the states where the deployment misuses it.
 
-El estado del artefacto final es el último student; cada iteración registra
-la métrica desplegada (δ(s) observada) para la curva del paper (Fig. 4).
+The final artifact state is the latest student; each iteration records
+the displayed metric (δ(s) observed) for the paper curve (Fig. 4).
 """
 
 from __future__ import annotations
@@ -39,9 +39,9 @@ __all__ = ["DAggerConfig", "run_dagger"]
 @dataclass
 class DAggerConfig:
     n_iters: int = 2
-    oversample: int = 3           # réplicas de danger añadidas al replay
+    oversample: int = 3           # danger replicas added to the replay
     smooth_bw: float = 0.05
-    seed_offset: int = 0          # offset del RunConfig por iteración
+    seed_offset: int = 0          # RunConfig offset per iteration
 
 
 def _danger_mask(res, sample, labels: dict[str, np.ndarray]) -> np.ndarray:
@@ -50,7 +50,7 @@ def _danger_mask(res, sample, labels: dict[str, np.ndarray]) -> np.ndarray:
     wrong |= res.pred_choice[:n] != labels["choice"][:n]
     attack = labels["gate"][:n] == 1
     wrong |= attack & (res.pred_level[:n] != (labels["sev"][:n] - 1))
-    # solo eventos SERVIDOS con alguna cabeza en modo student
+    # only SERVED events with some head in student mode
     return wrong & res.narrow[:n].any(axis=1)
 
 
@@ -70,7 +70,7 @@ def run_dagger(
     service_scale: float = 2.5,
     lat_report_path: str | None = None,
 ) -> StudentArtifact:
-    """Ejecuta DAgger y devuelve el student final (StudentArtifact)."""
+    """Run DAgger and return the final student (StudentArtifact)."""
     dcfg = dcfg or DAggerConfig()
     net = copy.deepcopy(teacher.net)
     mu, sd = replay["train"].standardize
@@ -78,7 +78,7 @@ def run_dagger(
     rollout_sample = samples["rollout"]
 
     if router_cfg is None:
-        # derivación κ de la campaña; lat_report en results
+        # derivation κ of the campaign; lat_report in results
         import json
         from .policies import derive_thresholds_from_latency
         report = None
@@ -100,7 +100,7 @@ def run_dagger(
                   "sev": rollout_sample.severity[:n]}
         danger = _danger_mask(res, rollout_sample, labels)
         n_danger = int(danger.sum())
-        # ---- replay aumentado con los danger del rollout (s desplegado)
+        # ---- replay increased with rollout dangers (s displayed)
         feats_r = (rollout_sample.features[:n] - mu) / np.maximum(sd, 1e-6)
         rows = {
             "features": torch.from_numpy(np.concatenate(
@@ -114,7 +114,7 @@ def run_dagger(
             "s_vec": torch.from_numpy(np.concatenate(
                 [res.s_vec[:n]] + [res.s_vec[:n][danger]] * dcfg.oversample).astype(np.float32)),
         }
-        # estrato desplegado de las filas (tiles del train glass box)
+        # displayed row stratum (train glass box tiles)
         strata_tr = tiles.of(replay["train"].s_vec[:, 0].numpy() if
                              replay["train"].s_vec is not None else np.zeros(len(replay["train"])))
         strata_r = tiles.of(res.s_vec[:n, 0])
@@ -135,7 +135,7 @@ def run_dagger(
             s_vec=torch.cat([replay["train"].s, rows["s_vec"]
                              / torch.as_tensor(sim_cfg.s_scale, dtype=torch.float32)]),
         )
-        # ---- re-destilación con el replay aumentado
+        # ---- re-distillation with increased replay
         with torch.no_grad():
             tgt = precompute_targets(teacher.net, aug.features, aug.s,
                                      teacher.temperatures, tsc.tau)

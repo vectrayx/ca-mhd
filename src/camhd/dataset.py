@@ -1,11 +1,11 @@
-"""Construcción de datasets de replay a partir del generador acoplado.
+"""Construction of replay datasets from the coupled generator.
 
-Splits por horizonte temporal con seeds separadas por subsistema
-(RunConfig v3): cada bloque es un horizonte propio del generador.
-La estandarización de features se ajusta SOLO en train (stats train-only).
+Splits by time horizon with seeds separated by subsystem
+(RunConfig v3): each block is a generator's own horizon.
+Feature standardization is set ONLY in train (train-only stats).
 
-El estado de carga s de cada evento: 0 = normal, 1 = burst (proxy del
-estrato; el DES añadirá cuantiles de q_t reales para el estrato por cola).
+The state of charge s of each event: 0 = normal, 1 = burst (proxy of the
+stratum; DES will add actual q_t quantiles for stratum per queue).
 """
 
 from __future__ import annotations

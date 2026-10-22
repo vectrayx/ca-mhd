@@ -1,24 +1,24 @@
-"""DES de serving — Fase F2 (plan v3 §4: motor del CUL-Bench).
+"""DES de serving — Phase F2 (plan v3 §4: CUL-Bench engine).
 
-Simulación a eventos discretos de un core de serving MLP, EN ESTE CPU:
+Discrete event simulation of an MLP serving core, ON THIS CPU:
 
-- Llegadas: exactas del generador acoplado (misma ley que el entrenamiento).
-- Servicio por MICRO-LOTES: cuando el core queda libre drena la cola hasta
-  B eventos y ejecuta UN forward real (`forward_heads`) — el tiempo de
-  servicio es la latencia MEDIDA de ese lote en este CPU × `service_scale`
-  (ancla al punto operativo pre-registrado: ρ_t(burst)≈1.1 > 1 ≥ ρ_s).
-  Sin distribuciones sintéticas: el jitter es el jitter real del hardware.
-- κ_switch: cuando el conjunto de cabezas estrechas cambia entre servicios
-  consecutivos, se factura el exceso medido (evicción de 16 MB + cold fetch).
-- Router: política externa; recibe q (backlog al tick) y devuelve el
-  conjunto de cabezas en modo student. Schmitt/histéresis viven ahí.
-- S_infra = (q_t, λ_t, ℓ_p95_t) registrado por evento (input del modelo,
-  estratificación del contrato δ(s)).
+- Arrivals: exact from the coupled generator (same law as training).
+- Service by MICRO-LOTS: when the core is free, it drains the tail until
+B events and executes A real forward (`forward_heads`) — the time of
+service is the MEASURED latency of that batch on this CPU × `service_scale`
+(anchor to pre-registered operating point: ρ_t(burst)≈1.1 > 1 ≥ ρ_s).
+No synthetic distributions: the jitter is the actual hardware jitter.
+- κ_switch: when the set of narrow heads switches between services
+consecutive, the measured excess is billed (eviction of 16 MB + cold fetch).
+- Router: external policy; receives q (backlog to the tick) and returns the
+set of heads in student mode. Schmitt/hysteresis live there.
+- S_infra = (q_t, λ_t, ℓ_p95_t) recorded by event (model input,
+contract stratification δ(s)).
 
-Replay de entrenamiento (glass box) = misma DES con política fija
-all-teacher: saturación real en bursts → estados de cola profundos.
+Training replay (glass box) = same DES with fixed policy
+all-teacher: real saturation in bursts → deep queue states.
 
-Tiempos: TODO en "segundos de stream"; latencias reportadas en µs ×1e6.
+Timing: ALL in "stream seconds"; latencies reported in µs ×1e6.
 """
 
 from __future__ import annotations
@@ -41,34 +41,34 @@ __all__ = ["SimConfig", "SimResult", "RouterPolicy", "run_des", "glass_box_des"]
 class SimConfig:
     batch_size: int = 16
     service_scale: float = 2.5      # ancla del punto operativo (ver docstring)
-    kappa_scale: float = 2.5        # mismo núcleo → mismo factor
-    rate_idle: float = 2000.0       # llegadas/s (registradas del StreamConfig)
+    kappa_scale: float = 2.5        # same core → same factor
+    rate_idle: float = 2000.0       # arrivals/s (recorded from StreamConfig)
     rate_burst: float = 14000.0
-    t_end: float | None = None      # None = agotar el stream
-    l_max_us: float = 1500.0        # SLA p99 por evento
+    t_end: float | None = None      # None = exhaust the stream
+    l_max_us: float = 1500.0        # SLA p99 per event
     device: str = "cpu"
-    lp95_window: int = 200          # ventana rodante de ℓ_p95 (para S_infra)
-    max_services: int = 2_000_000   # guardaespaldas
-    # escalado de S_infra PARA EL MODELO (mismo pipeline que el entrenamiento;
-    # los s_vec almacenados quedan RAW para estratificación)
+    lp95_window: int = 200          # ℓ_p95 rolling window (for S_infra)
+    max_services: int = 2_000_000   # bodyguard
+    # S_infra scaling FOR THE MODEL (same pipeline as training;
+    # the stored s_vec are left RAW for stratification)
     s_scale: tuple[float, float, float] = (200.0, 14000.0, 1e4)
-    # seed del reloj de servicio (Enmienda 3 + repro por deploy): run_des
-    # RESETA el RNG del LatencyModel con esta seed — el orden de despacho
-    # de la campaña no debe afectar las métricas de un deploy
+    # service clock seed (Amendment 3 + repro by deploy): run_des
+    # RESET the RNG of the LatencyModel with this seed — the dispatch order
+    # of the campaign should not affect the metrics of a deploy
     rng_seed: int = 7420
 
 
 @dataclass
 class SimResult:
-    t_arr: np.ndarray          # llegada [n] (s de stream)
-    t_dep: np.ndarray          # partida [n] (s de stream)
-    q_arr: np.ndarray          # cola observada al llegar (pre-join, head-of-line)
-    q_s: np.ndarray            # backlog al tick de servicio (input del router)
+    t_arr: np.ndarray          # arrival [n] (s of stream)
+    t_dep: np.ndarray          # game [n] (stream s)
+    q_arr: np.ndarray          # queue observed upon arrival (pre-join, head-of-line)
+    q_s: np.ndarray            # backlog to service tick (router input)
     lat_us: np.ndarray         # (t_dep − t_arr) ×1e6
-    s_vec: np.ndarray          # [n,3] (q_t, λ_t, ℓ_p95_t) al servicio
-    narrow: np.ndarray         # [n,3] bool por cabeza (gate, choice, corn)
-    kappa_n: np.ndarray        # [n] 1 si el servicio consumió un κ_switch
-    pred_gate: np.ndarray      # [n] prob de ataque desplegada
+    s_vec: np.ndarray          # [n,3] (q_t, λ_t, ℓ_p95_t) to the service
+    narrow: np.ndarray         # [n,3] bool per head (gate, choice, corn)
+    kappa_n: np.ndarray        # [n] 1 if the service consumed a κ_switch
+    pred_gate: np.ndarray      # [n] attack prob deployed
     pred_choice: np.ndarray    # [n] argmax choice
     pred_level: np.ndarray     # [n] argmax pmf corn
     conf_choice: np.ndarray    # [n] confianza top-1 choice
@@ -96,10 +96,10 @@ class SimResult:
 
 
 class RouterPolicy:
-    """Política base: todas las cabezas en modo teacher SIEMPRE.
+    """Base policy: all heads in teacher mode ALWAYS.
 
-    update(q, t) → subconjunto de ("gate","choice","corn") en modo student.
-    Las políticas con estado (Schmitt) mantienen su máquina interna aquí.
+update(q, t) → subset of ("gate","choice","corn") in student mode.
+Stateful (Schmitt) policies keep your internal machine here.
     """
 
     def update(self, q: int, t: float) -> tuple[str, ...]:
@@ -114,12 +114,12 @@ def run_des(
     cfg: SimConfig,
     standardize: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> SimResult:
-    """DES de serving. policy=None → all-teacher (glass box); model=None →
-    servicio por cola puro (solo sanity del harness sin inferencia)."""
-    # Reloj de servicio reproducible POR DEPLOY: reseteo el RNG del
-    # LatencyModel (lognormal con CV medida, seed fija por deploy —
-    # el orden de despacho de la campaña es irrelevante para las
-    # métricas; Enmienda 3).
+    """DES of serving. policy=None → all-teacher (glass box); model=None →
+pure queue service (only harness sanity without inference)."""
+    # Service clock reproducible BY DEPLOY: reset the RNG of the
+    # LatencyModel (lognormal with measured CV, fixed seed by deploy —
+    # The dispatch order of the campaign is irrelevant for the
+    # metrics; Amendment 3).
     lat.rng = np.random.default_rng(cfg.rng_seed)
     HN = ("gate", "choice", "corn")
     n_src = len(sample)
@@ -139,7 +139,7 @@ def run_des(
     device = torch.device(cfg.device)
     model = model.eval() if model is not None else None
 
-    # salidas por evento
+    # event departures
     t_dep = np.zeros(n, dtype=np.float64)
     q_arr = np.zeros(n, dtype=np.int64)
     q_s = np.zeros(n, dtype=np.int64)
@@ -157,7 +157,7 @@ def run_des(
     lp95_win: deque[float] = deque(maxlen=cfg.lp95_window)
     queue: deque[int] = deque()
 
-    # estado del server
+    # server status
     serv_end: float | None = None
     serv_batch: tuple[int, ...] = ()
     serv_narrow: tuple[str, ...] = ()
@@ -176,26 +176,26 @@ def run_des(
             narrow = ()
         kappa_here = (cur_narrow is not None and narrow != cur_narrow)
         if kappa_here:
-            evict.fill_(float(done))   # cold fetch del nuevo conjunto de pesos
+            evict.fill_(float(done))   # cold fetch of the new set of weights
             n_switch += 1
         b = min(cfg.batch_size, len(queue))
         idx = tuple(queue.popleft() for _ in range(b))
         lam = float(cfg.rate_burst if sample.in_burst[idx[0]] else cfg.rate_idle)
         lp95 = float(np.percentile(np.asarray(lp95_win, dtype=np.float64), 95)) if lp95_win else 0.0
-        # registro por evento del lote
+        # batch event log
         for j in idx:
             s_vec[j] = (q_now, lam, lp95)
             for k, name in enumerate(HN):
                 narrow_mat[j, k] = name in narrow
             kappa_n[j] = 1 if kappa_here else 0
-        # Enmienda 3 (2026-10-21): el reloj de servicio sale de la tabla del
-        # microbench (muestreo lognormal con la CV medida, seed fija) y el κ
-        # de conmutación se inserta como costo aparte. El forward real corre
-        # para obtener las PREDICCIONES, fuera del reloj (igual que el
-        # post-proceso): el tiempo de máquina vivo no es reproducible y
-        # arrastra overheads de staging que el microbench amortiza — lo que
-        # desplazaba el punto operativo ρ entre corridas (bug del pilot v1:
-        # la cola no drenaba porque el servicio vivo medía ~50 ms/evento).
+        # Amendment 3 (2026-10-21): the service clock leaves the table of the
+        # microbench (lognormal sampling with measured CV, fixed seed) and κ
+        # switching is inserted as a separate cost. The real forward runs
+        # to get the PREDICTIONS, off the clock (same as the
+        # post-process): live machine time is not reproducible and
+        # drags staging overheads that the microbench amortizes — which
+        # moved the operating point ρ between runs (pilot v1 bug:
+        # the queue was not draining because the live service was measuring ~50 ms/event).
         dur_us = 0.0
         if len(narrow) == 0:
             dur_us = float(lat.sample_service_us("teacher", b))
@@ -207,7 +207,7 @@ def run_des(
         if kappa_here:
             dur_us += float(lat.sample_kappa_us(b))
         if model is not None:
-            # PREDICCIONES del modelo real servido (fuera del reloj)
+            # PREDICTIONS from the actual served model (off-clock)
             xb = torch.from_numpy(np.ascontiguousarray(feats[list(idx)]).astype(np.float32))
             s_row = np.asarray([[q_now / cfg.s_scale[0], lam / cfg.s_scale[1],
                                  lp95 / cfg.s_scale[2]]], dtype=np.float32)
@@ -238,14 +238,14 @@ def run_des(
     while done < n and steps < cfg.max_services:
         steps += 1
         if serv_end is not None and (i >= n or serv_end <= t_arr[i]):
-            # completar servicio
+            # complete service
             t_clock = serv_end
             for j in serv_batch:
                 t_dep[j] = t_clock
                 lat_us[j] = (t_clock - t_arr[j]) * 1e6
                 lp95_win.append(float(lat_us[j]))
             done += len(serv_batch)
-            # canal de latencia de la política (LatencyGuard del método)
+            # channel latency policy (LatencyGuard method)
             if queue and policy is not None and hasattr(policy, "observe"):
                 lp95_now = float(np.percentile(np.asarray(lp95_win, dtype=np.float64), 95))
                 policy.observe(lp95_now, t_clock)
@@ -254,7 +254,7 @@ def run_des(
             if queue:
                 _start_service(t_clock)
         elif i < n:
-            # llegada (o lote de llegadas simultáneas)
+            # arrival (or batch of simultaneous arrivals)
             t_clock = t_arr[i]
             while i < n and t_arr[i] == t_clock:
                 q_arr[i] = len(queue)
@@ -285,6 +285,6 @@ def glass_box_des(
     lat: LatencyModel,
     standardize: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> SimResult:
-    """Replay de entrenamiento: política fija all-teacher."""
+    """Training replay: fixed all-teacher policy."""
     return run_des(sample, None, None, lat, cfg, standardize) if model is None else \
         run_des(sample, model, None, lat, cfg, standardize)

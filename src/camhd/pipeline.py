@@ -1,13 +1,13 @@
-"""Pipeline F2: streams → DES glass box → replay con S_infra → teacher.
+"""Pipeline F2: streams → DES glass box → replay with S_infra → teacher.
 
-- splits por horizonte, seeds separadas por subsistema (RunConfig).
-- El DES glass box (all-teacher, servicio por tabla medida del microbench)
-  materializa la trayectoria de cola q_t que define los estratos de carga y
-  el estado S_infra = (q, λ, ℓ_p95) que condiciona el trunk.
-- Escalado de S_infra pre-registrado: q/q_scale, λ/λ_scale, ℓ_p95/ℓ_scale.
-- Estratos por cuantiles de q del train glass box: calm (≤q50),
-  warm (50–90), hot (>90). El estrato viaja en `stratum` y el G1 se evalúa
-  smoothECE por cabeza × estrato.
+- splits by horizon, seeds separated by subsystem (RunConfig).
+- The DES glass box (all-teacher, service by measured table of the microbench)
+materializes the tail trajectory q_t that defines the load strata and
+the state S_infra = (q, λ, ℓ_p95) that conditions the trunk.
+- Scaling of S_infra pre-registered: q/q_scale, λ/λ_scale, ℓ_p95/ℓ_scale.
+- Strata by quantiles of q of the train glass box: calm (≤q50),
+warm (50–90), hot (>90). Stratum travels in `stratum` and G1 is evaluated
+smoothECE per head × stratum.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ __all__ = ["SInfraScale", "ReplayBundle", "build_replay_bundle"]
 class SInfraScale:
     q_scale: float = 200.0        # backlog p95 esperado ~1e2–1e3 → /200
     lam_scale: float = 14000.0    # rate_burst del punto operativo
-    lp95_scale: float = 1e4       # ℓ_p95 del núcleo edge: 10 ms
+    lp95_scale: float = 1e4       # edge core ℓ_p95: 10 ms
 
     def apply(self, s_vec: np.ndarray) -> np.ndarray:
         return np.stack([
@@ -60,8 +60,8 @@ def build_replay_bundle(
     seeds: dict[str, int] | None = None,
     scale: SInfraScale | None = None,
 ) -> ReplayBundle:
-    """Genera cada split con seed propia y ejecuta el DES glass box (all
-    teacher) para materializar los estados de carga del replay."""
+    """Generate each split with its own seed and run the DES glass box (all
+teacher) to materialize the replay load states."""
     seed_map = seeds or {"train": 0, "val": 1, "test": 2, "rollout": 3}
     scale = scale or SInfraScale()
     datasets: dict[str, ReplayDataset] = {}
@@ -70,7 +70,7 @@ def build_replay_bundle(
     stats: tuple[np.ndarray, np.ndarray] | None = None
     q_tiles = (1.0, 2.0)
 
-    # primer split (train) fija la estandarización y los cuantiles
+    # first split (train) sets the standardization and quantiles
     names = ["train"] + [k for k in horizons if k != "train"]
     for name in names:
         horizon = horizons[name]

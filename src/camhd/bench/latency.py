@@ -1,22 +1,22 @@
-"""Microbench de latencia y κ_switch en el hardware objetivo (plan v3 G4/R5).
+"""Latency and κ_switch microbench on the target hardware (plan v3 G4/R5).
 
-Modelo de servicio, 100% medido en ESTE CPU (1 hilo, eager torch — el
-runtime de serving): el servidor de despliegue trabaja por MICRO-LOTES
-(típico en serving batch-1 MLP). Tabla medida:
+Service model, 100% measured on THIS CPU (1 thread, eager torch — the
+serving runtime): the deployment server works by MICRO-BATCHES
+(typical in serving batch-1 MLP). Measurement table:
 
-- por batch B ∈ {1,4,8,16,32} × modo: media/p95/p99/CV del forward real
-  (µs por LOTE, con per-event derivado). El DES interpola esta tabla para
-  el tiempo de servicio de los lotes.
-- `per_event` muestra el gap teacher/student emergente (solo cómputo cuando
-  el batching amortiza el dispatch: factor ~1.3× a B=32, medido).
-- `kappa_switch_us[B]`: exceso del par alternado teacher→student (con
-  evicción de 16 MB entre modos — cold cache/TLB de pesos) vs steady.
-- `jitter_cv`: CV del ruido de ejecución para la distribución del DES.
+- by batch B ∈ {1,4,8,16,32} × mode: average/p95/p99/CV of the actual forward
+(µs per BATCH, with per-event derived). DES interpolates this table to
+the service time of the batches.
+- `per_event` shows the teacher/student gap popup (only computation when
+batching amortizes dispatch: factor ~1.3× at B=32, measured).
+- `kappa_switch_us[B]`: excess of the alternating pair teacher→student (with
+eviction of 16 MB between modes — cold cache/weight TLB) vs steady.
+- `jitter_cv`: CV of the execution noise for the DES distribution.
 
-El SLA ancla: L_max = 1.5 ms p99 por evento, ≥5k ev/s por núcleo.
-Honestidad: los eager end-to-end batch=1 son dominance de dispatch (~350µs);
-el fenómeno de capacidad del paper vive en el régimen batched, que es el
-régimen de serving del DES.
+The anchor SLA: L_max = 1.5 ms p99 per event, ≥5k ev/s per core.
+Honesty: eager end-to-end batch=1 are dispatch dominance (~350µs);
+The paper capacity phenomenon lives in the batched regime, which is the
+DES serving regime.
 """
 
 from __future__ import annotations
@@ -85,8 +85,8 @@ def run_latency_bench(net: CAMHDNet | None = None, d: int = 16,
         t_s = _time(lambda: net(xb, sb, mode="student"), n_warm, n_meas)
         batch_table["teacher"][B] = _stats(t_t)
         batch_table["student"][B] = _stats(t_s)
-        # κ_switch: alternancia con evicción de 16MB entre modos (cold weights).
-        # fill_ = tráfico de memoria puro (sin coste RNG), fuerza el cold-fetch.
+        # κ_switch: alternation with eviction of 16MB between modes (cold weights).
+        # fill_ = pure memory traffic (no RNG cost), forces cold-fetch.
         evict = torch.empty(4 << 20, dtype=torch.float32)  # 16 MB
         with torch.no_grad():
             for i in range(n_warm // 4):
@@ -103,8 +103,8 @@ def run_latency_bench(net: CAMHDNet | None = None, d: int = 16,
                 ts.append((time.perf_counter_ns() - t0) / 1000.0)
                 mode = "student" if mode == "teacher" else "teacher"
             t_alt = np.asarray(ts)
-        # la mitad de las llamadas alternadas son de CADA modo → su par
-        # steady equivalente es (mean_t + mean_s)/2 por llamada
+        # half of the alternate calls are EACH mode → its pair
+        # steady equivalent is (mean_t + mean_s)/2 per call
         steady_half = (batch_table["teacher"][B]["mean"]
                        + batch_table["student"][B]["mean"]) / 2
         alt_mean = float(np.median(t_alt))
@@ -133,7 +133,7 @@ def run_latency_bench(net: CAMHDNet | None = None, d: int = 16,
 
 
 class LatencyModel:
-    """Modelo de servicio del DES: tabla medida batch×modo + κ_switch."""
+    """DES service model: batch×mode measurement table + κ_switch."""
 
     def __init__(self, report: dict, batch_size: int = 16, rng_seed: int = 777) -> None:
         self.batch_size = batch_size
@@ -153,7 +153,7 @@ class LatencyModel:
         return _interp(tab, b, "cv")
 
     def sample_service_us(self, mode: str, b: int | None = None) -> float:
-        """Tiempo del LOTE de b eventos: lognormal con cv medida, truncado ≥ 1µs."""
+        """BATCH time of b events: lognormal with measured cv, truncated ≥ 1µs."""
         b = b or self.batch_size
         mean = self.mean_service_us(mode, b)
         cv = self.cv_service(mode, b)
@@ -162,7 +162,7 @@ class LatencyModel:
         return float(max(self.rng.lognormal(mu, np.sqrt(s2_log)), 1.0))
 
     def sample_kappa_us(self, b: int | None = None) -> float:
-        """Penalización de conmutación de modo (cold fetch del otro conjunto)."""
+        """Mode switching penalty (cold fetch of the other set)."""
         b = b or self.batch_size
         bs = sorted(self.kappa_by_batch)
         if b <= bs[0]:

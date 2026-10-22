@@ -1,13 +1,13 @@
-"""Evaluador desplegable (F3/F4): métricas del CUL-Bench por estrato.
+"""Drop-down Evaluator (F3/F4): CUL-Bench metrics by stratum.
 
-De un SimResult (DES con modelo y política) + tiles de q del glass box train,
-produce:
-- smoothECE desplegado por cabeza × estrato (calm/warm/hot) — el δ(s)
-  contrarresta el observado por el contrato;
-- accuracy/AUROC por estrato del gate;
-- κ contable: nº de conmutaciones, cobertura student, tristeza Δ vs el
-  teacher-only (estimador de captura de Prop 3),
-- violacion SLA y percentiles de latencia.
+From a SimResult (DES with model and policy) + q tiles from the glass box train,
+produces:
+- smoothECE displayed per head × stratum (calm/warm/hot) — the δ(s)
+counteracts that observed by the contract;
+- accuracy/AUROC per gate stratum;
+- Accounting κ: number of commutations, student coverage, sadness Δ vs.
+teacher-only (Prop 3 capture estimator),
+- SLA violation and latency percentiles.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ def deployed_metrics(
     l_max_us: float = 1500.0,
     bw: float = 0.05,
 ) -> dict:
-    """Métricas del DES desplegado. Los arrays de labels son del split evaluado."""
+    """Deployed DES metrics. The label arrays are from the evaluated split."""
     n = res.n
     q = res.s_vec[:, 0] if n else np.zeros(0)
     stratum = tiles.of(q) if n else np.zeros(0, dtype=np.int64)
@@ -49,7 +49,7 @@ def deployed_metrics(
     corr_gate = ((p_gate >= 0.5).astype(np.int64) == labels_gate[:n]).astype(float)
     corr_choice = (res.pred_choice[:n] == labels_choice[:n]).astype(float)
     corr_corn = np.zeros(n)
-    m_corn = (labels_gate[:n] == 1)  # la cabeza ordinal solo evaluable en ataques
+    m_corn = (labels_gate[:n] == 1)  # the ordinal head only evaluable in attacks
     corr_corn[m_corn] = (res.pred_level[:n][m_corn] == labels_sev[:n][m_corn] - 1)
     conf_corn = res.conf_corn[:n]
 
@@ -73,7 +73,7 @@ def deployed_metrics(
         "auroc": _auroc(p_gate, labels_gate[:n]),
         "acc": float(corr_gate.mean()) if n else float("nan"),
     }
-    # κ contable y cobertura student
+    # κ accounting and student coverage
     out["serve"] = {
         "n_switches": int(res.n_switches),
         "student_coverage": float(res.narrow[:n].any(axis=1).mean()) if n else float("nan"),
